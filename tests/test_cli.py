@@ -127,6 +127,19 @@ class CliTests(unittest.TestCase):
         self.assertTrue(status['running'])
         self.assertTrue(status['audio_muted'])
 
+    @mock.patch('cli.pid_is_alive', return_value=True)
+    @mock.patch('cli.service_main_pid', return_value=42)
+    @mock.patch('cli.service_is_active', return_value=True)
+    @mock.patch('cli._read_state', return_value={
+        'running': True, 'state': 'running', 'error': None, 'pid': 42,
+        'player': {'q': 4, 'max_q': 12, 'skip_cycles': 0, 'wait_key': False},
+    })
+    def test_status_includes_live_player_queue(self, *_mocks):
+        status = cli.current_status()
+        self.assertTrue(status['running'])
+        self.assertEqual(status['player']['q'], 4)
+        self.assertEqual(status['player']['max_q'], 12)
+
     @mock.patch("cli.current_status")
     def test_status_output_is_compact_json(self, current_status):
         current_status.return_value = {
@@ -152,6 +165,17 @@ class CliTests(unittest.TestCase):
         status=cli.current_status()
         self.assertFalse(status['running'])
         self.assertEqual(status['error'],'stream-stop-failed')
+
+    @mock.patch('cli.service_is_active', return_value=False)
+    @mock.patch('cli._read_state', return_value={
+        'running': False, 'state': 'error', 'error': 'player-backlog', 'pid': 1,
+        'backlog': {'q': 120, 'feeds_1s': 90, 'writes_1s': 2, 'rtp': {'gaps': 0}},
+    })
+    def test_terminal_backlog_snapshot_is_visible(self, _state, _active):
+        status = cli.current_status()
+        self.assertEqual(status['error'], 'player-backlog')
+        self.assertEqual(status['backlog']['q'], 120)
+        self.assertEqual(status['backlog']['rtp']['gaps'], 0)
 
     @mock.patch('cli.current_status', return_value={'running':False,'state':'stopped','error':None,'pid':0})
     def test_stopped_status_query_succeeds_for_plugin(self, _status):

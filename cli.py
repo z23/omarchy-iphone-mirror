@@ -119,7 +119,12 @@ def current_status() -> dict[str, Any]:
         if (state and state.get('running') is False
                 and state.get('state') in ('error', 'disconnected')
                 and isinstance(state.get('error'), str)):
-            return {'running': False, 'state': state['state'], 'error': state['error'], 'pid': 0}
+            result = {'running': False, 'state': state['state'], 'error': state['error'], 'pid': 0}
+            if isinstance(state.get('backlog'), dict):
+                result['backlog'] = state['backlog']
+            if isinstance(state.get('player'), dict):
+                result['player'] = state['player']
+            return result
         return {"running": False, "state": "stopped", "error": None, "pid": 0}
 
     main_pid = service_main_pid()
@@ -170,6 +175,9 @@ def current_status() -> dict[str, Any]:
         result["player_pid"] = player_pid
     if isinstance(state.get("audio_muted"), bool):
         result["audio_muted"] = state["audio_muted"]
+    player = state.get("player")
+    if isinstance(player, dict):
+        result["player"] = player
     return result
 
 
