@@ -238,6 +238,8 @@ class DirectPlayer:
         self._queue_band = 0
         self.player = subprocess.Popen([
             'mpv', '--no-config', '--profile=low-latency',
+            # Vulkan gpu-next (waylandvk) wedged Wayland pings (Hyprland ANR).
+            '--gpu-api=opengl', '--gpu-context=wayland',
             '--title=iPhone — Mirror', '--geometry=400x870',
             # Portrait default; InputBridge follows the phone and may swap this.
             '--input-ipc-server='+str(ipc_path), '--osc=no',
