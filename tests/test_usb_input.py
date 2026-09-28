@@ -103,6 +103,45 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(toggles, [False, True])
         self.assertTrue(self.b.audio_muted)
 
+    async def test_speaker_draws_unavailable_instead_of_unmuted(self):
+        self.b.dimensions = {'w': 400, 'h': 1000}
+        self.b.audio_available = False
+        self.b.audio_muted = False
+        await self.b.draw_toolbar()
+        overlay = self.b.command.await_args.args[3]
+        self.assertIn('&H808080&', overlay)
+        self.assertIn('m 20 4 l 4 20', overlay)
+        self.assertNotIn('m 17 8', overlay)
+
+    async def test_muted_speaker_is_not_the_unavailable_mark(self):
+        self.b.dimensions = {'w': 400, 'h': 1000}
+        self.b.audio_available = True
+        self.b.audio_muted = True
+        await self.b.draw_toolbar()
+        overlay = self.b.command.await_args.args[3]
+        self.assertIn('m 4 4 l 20 20', overlay)
+        self.assertNotIn('m 20 4 l 4 20', overlay)
+        self.assertNotIn('m 17 8', overlay)
+
+    async def test_unavailable_speaker_does_not_unmute(self):
+        toggles = []
+        self.b.focused = True
+        self.b.dimensions = {'w': 400, 'h': 1000}
+        self.b.audio_available = False
+        self.b.on_audio_toggle = toggles.append
+        self.b.mouse = {'x': 360, 'y': 960, 'hover': True}
+        await self.b.key('dm-', 'MBTN_LEFT', '')
+        await self.b.gesture_task
+        self.assertEqual(toggles, [])
+        self.assertTrue(self.b.audio_muted)
+        self.assertFalse(self.b.audio_available)
+        texts = [c.args for c in self.b.command.await_args_list if c.args and c.args[0] == 'show-text']
+        self.assertEqual(texts, [('show-text', 'Audio is not available.', 2000)])
+        overlays = [c.args[3] for c in self.b.command.await_args_list
+                    if c.args and c.args[0] == 'osd-overlay']
+        self.assertTrue(overlays)
+        self.assertIn('m 20 4 l 4 20', overlays[-1])
+
     async def test_cancel_toolbar_gesture(self):
         import asyncio
         self.b.focused = True
@@ -166,6 +205,24 @@ class InputTests(unittest.IsolatedAsyncioTestCase):
             reports = self.b.hid.send_touchscreen.await_args_list
             self.assertEqual(len(reports),10)
             self.assertGreater(sign*(reports[-1].args[2]-reports[0].args[2]),0)
+            self.assertEqual(reports[-1].args[0],2)
+            self.assertIsNone(self.b.contact)
+
+    async def test_vertical_wheel_in_landscape_moves_buffer_x(self):
+        self.b.focused = True
+        self.b.visual_rotate = 270
+        self.b.dimensions = {'w':1000,'h':400,'mb':56}
+        self.b.mouse = {'x':500,'y':160,'hover':True}
+        # Displayed down is negative buffer X at 270°, so wheel-up (finger
+        # down on the picture) decreases X and leaves Y unchanged.
+        for name, sign in [('WHEEL_UP',-1),('WHEEL_DOWN',1)]:
+            self.b.hid.send_touchscreen.reset_mock()
+            await self.b.key('p--',name,'')
+            await self.b.gesture_task
+            reports = self.b.hid.send_touchscreen.await_args_list
+            self.assertEqual(len(reports),10)
+            self.assertGreater(sign*(reports[-1].args[1]-reports[0].args[1]),0)
+            self.assertEqual(reports[-1].args[2], reports[0].args[2])
             self.assertEqual(reports[-1].args[0],2)
             self.assertIsNone(self.b.contact)
 

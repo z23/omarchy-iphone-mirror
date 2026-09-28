@@ -19,8 +19,8 @@ from pymobiledevice3.remote.core_device.hid_service import (
 from pymobiledevice3.remote.core_device.vnc_server import ASCII_TO_HID
 from pymobiledevice3.remote.core_device.pasteboard_service import PasteboardService
 from orientation import (
-    TOOLBAR_RATIO, displayed_landscape, hid_from_displayed, swapped_geometry,
-    toolbar_ratio_for, visual_rotate,
+    TOOLBAR_RATIO, displayed_landscape, hid_from_displayed, scroll_hid_delta,
+    swapped_geometry, toolbar_ratio_for, visual_rotate,
 )
 
 SPECIAL = {'SPACE': 44, 'ENTER': 40, 'KP_ENTER': 40, 'BS': 42,
@@ -141,6 +141,9 @@ class InputBridge:
         self.scrolling = False
         self.scroll_pending = 0.0
         self.paste_cancel_until = 0.0
+        self.audio_muted = True
+        self.audio_available = True
+        self.on_audio_toggle = None
         self.device_orientation = 1
         self.buffer_w = 0
         self.buffer_h = 0
@@ -150,8 +153,6 @@ class InputBridge:
         self.orientation_task = None
         self.springboard = None
         self._orientation_warned = False
-        self.audio_muted = True
-        self.on_audio_toggle = None
 
     async def scroll_wheel(self):
         try:
@@ -161,13 +162,22 @@ class InputBridge:
                 pos = touch_position(self.mouse, self.dimensions, rotate=self.visual_rotate)
                 if pos is None or toolbar_action(self.mouse, self.dimensions, self.toolbar_ratio):
                     break
-                # Stay away from system-gesture edges. Down-wheel = finger up.
-                x = max(3277, min(62258, pos[0]))
-                y = max(13107, min(52428, pos[1]))
-                end_y = max(6554, min(58981, round(y + amount*6553)))
+                # Stay away from system-gesture edges. Down-wheel = finger up
+                # on the picture the user sees, including after video-rotate.
+                dx, dy = scroll_hid_delta(amount, self.visual_rotate)
+                if abs(dx) > abs(dy):
+                    y = max(3277, min(62258, pos[1]))
+                    x = max(13107, min(52428, pos[0]))
+                    end_x = max(6554, min(58981, round(x + dx*6553)))
+                    end_y = y
+                else:
+                    x = max(3277, min(62258, pos[0]))
+                    y = max(13107, min(52428, pos[1]))
+                    end_x = x
+                    end_y = max(6554, min(58981, round(y + dy*6553)))
                 try:
                     for step in range(9):
-                        self.contact = (x, round(y+(end_y-y)*step/8))
+                        self.contact = (round(x+(end_x-x)*step/8), round(y+(end_y-y)*step/8))
                         await self.hid.send_touchscreen(TOUCHSCREEN_STATE_CONTACT, *self.contact)
                         if step < 8:
                             await asyncio.sleep(.015)
@@ -210,9 +220,20 @@ class InputBridge:
         audio_x = w - size - pad
         if audio_x < search_x + size:
             audio_x = search_x + size + pad
-        speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
+        # Unavailable is a gray speaker with an X. Muted is a white speaker
+        # with one slash. Unmuted adds waves. An X is not the mute glyph, so
+        # a dead player is not drawn as if it were playing.
+        if not self.audio_available:
+            speaker_color = r'&H808080&'
+        else:
+            speaker_color = r'&HFFFFFF&'
+        speaker = (rf'{{\an7\pos({audio_x},{y})\bord0\shad0\1c{speaker_color}\fscx{scale*100}\fscy{scale*100}\p1}}'
                    'm 2 9 l 8 9 14 4 14 20 8 15 2 15')
-        if self.audio_muted:
+        if not self.audio_available:
+            mark = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&H808080&\fscx{scale*100}\fscy{scale*100}\p1}}'
+                    'm 4 4 l 20 20 m 20 4 l 4 20')
+            audio_events = [speaker, mark]
+        elif self.audio_muted:
             slash = (rf'{{\an7\pos({audio_x},{y})\bord2\shad0\1a&HFF&\3c&HFFFFFF&\fscx{scale*100}\fscy{scale*100}\p1}}'
                      'm 4 4 l 20 20')
             audio_events = [speaker, slash]
@@ -259,6 +280,11 @@ class InputBridge:
     async def audio_button(self):
         """Toggle computer playback. Does not change the phone volume."""
         try:
+            if not self.audio_available:
+                self.audio_muted = True
+                await self.draw_toolbar()
+                await self.command('show-text', 'Audio is not available.', 2000)
+                return
             self.audio_muted = not self.audio_muted
             if self.on_audio_toggle is not None:
                 self.on_audio_toggle(self.audio_muted)

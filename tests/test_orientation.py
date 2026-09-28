@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 from orientation import (
     displayed_landscape, hid_from_displayed, rotate_for_orientation,
-    swapped_geometry, toolbar_ratio_for, visual_rotate,
+    scroll_hid_delta, swapped_geometry, toolbar_ratio_for, visual_rotate,
 )
 from usb_input import InputBridge, touch_position, toolbar_action
 
@@ -24,6 +24,10 @@ class OrientationMathTests(unittest.TestCase):
         self.assertEqual(visual_rotate(1, 720, 1560), 0)
         self.assertEqual(visual_rotate(1, 1560, 720), 0)
         self.assertEqual(visual_rotate(4, 0, 0), 90)
+        # 180° does not change aspect, so a portrait buffer must keep it.
+        self.assertEqual(visual_rotate(2, 720, 1560), 180)
+        self.assertEqual(visual_rotate(2, 1560, 720), 180)
+        self.assertEqual(visual_rotate('portraitUpsideDown', 720, 1560), 180)
 
     def test_displayed_landscape(self):
         self.assertTrue(displayed_landscape(720, 1560, 90))
@@ -57,6 +61,13 @@ class OrientationMathTests(unittest.TestCase):
         self.assertEqual(hid_from_displayed(1, 0, 270), (1.0, 1.0))
         self.assertEqual(hid_from_displayed(0, 0, 180), (1.0, 1.0))
 
+    def test_scroll_delta_follows_displayed_vertical(self):
+        self.assertEqual(scroll_hid_delta(1, 0), (0.0, 1.0))
+        self.assertEqual(scroll_hid_delta(-1, 0), (0.0, -1.0))
+        self.assertEqual(scroll_hid_delta(1, 90), (1.0, 0.0))
+        self.assertEqual(scroll_hid_delta(1, 180), (0.0, -1.0))
+        self.assertEqual(scroll_hid_delta(1, 270), (-1.0, 0.0))
+
 
 class TouchRotateTests(unittest.TestCase):
     def test_identity_unchanged(self):
@@ -73,7 +84,7 @@ class TouchRotateTests(unittest.TestCase):
     def test_toolbar_still_window_bottom(self):
         dims = {'w': 870, 'h': 400, 'mb': 56}
         self.assertEqual(toolbar_action({'x':100,'y':380,'hover':True}, dims), 'home')
-        self.assertEqual(toolbar_action({'x':500,'y':380,'hover':True}, dims), 'search')
+        self.assertEqual(toolbar_action({'x':600,'y':380,'hover':True}, dims), 'search')
         self.assertEqual(toolbar_action({'x':800,'y':380,'hover':True}, dims), 'audio')
         self.assertIsNone(toolbar_action({'x':400,'y':200,'hover':True}, dims))
 
@@ -116,6 +127,16 @@ class ApplyViewTests(unittest.IsolatedAsyncioTestCase):
         commands = [c.args for c in self.b.command.await_args_list]
         self.assertIn(('set_property', 'video-rotate', 0), commands)
         self.assertIn(('set_property', 'geometry', '400x870'), commands)
+
+    async def test_upside_down_portrait_rotates_in_place(self):
+        self.b.buffer_w, self.b.buffer_h = 720, 1560
+        self.b.device_orientation = 2
+        with patch('usb_input.shutil.which', return_value=None):
+            await self.b.apply_view()
+        self.assertEqual(self.b.visual_rotate, 180)
+        commands = [c.args for c in self.b.command.await_args_list]
+        self.assertIn(('set_property', 'video-rotate', 180), commands)
+        self.assertNotIn(('set_property', 'geometry', '870x400'), commands)
 
     async def test_orientation_poll_applies_once(self):
         class Board:
